@@ -6,10 +6,6 @@ pipeline {
         BUILD_DIR = 'build'
     }
     
-    tools {
-        nodejs 'NodeJS'
-    }
-    
     stages {
         stage('Checkout') {
             steps {
@@ -18,30 +14,76 @@ pipeline {
             }
         }
         
+        stage('Setup Node.js') {
+            steps {
+                script {
+                    // Install Node.js using nvm
+                    sh '''
+                        # Load nvm if it exists, otherwise install it
+                        if [ -s "$HOME/.nvm/nvm.sh" ]; then
+                            . "$HOME/.nvm/nvm.sh"
+                        else
+                            echo "Installing nvm..."
+                            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+                            export NVM_DIR="$HOME/.nvm"
+                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                        fi
+                        
+                        # Install and use Node.js
+                        nvm install ${NODE_VERSION} || nvm use ${NODE_VERSION} || true
+                        nvm use ${NODE_VERSION}
+                        
+                        # Verify installation
+                        node --version
+                        npm --version
+                        
+                        # Add nvm to PATH for subsequent stages
+                        echo "export NVM_DIR=\"$HOME/.nvm\"" >> ~/.bashrc
+                        echo "[ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"" >> ~/.bashrc
+                    '''
+                }
+            }
+        }
+        
         stage('Install Dependencies') {
             steps {
-                echo 'Installing npm dependencies...'
-                sh '''
-                    npm ci --prefer-offline --no-audit
-                '''
+                script {
+                    sh '''
+                        export NVM_DIR="$HOME/.nvm"
+                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                        nvm use ${NODE_VERSION}
+                        echo 'Installing npm dependencies...'
+                        npm ci --prefer-offline --no-audit
+                    '''
+                }
             }
         }
         
         stage('Lint') {
             steps {
-                echo 'Running ESLint...'
-                sh '''
-                    npm run build --dry-run || true
-                '''
+                script {
+                    sh '''
+                        export NVM_DIR="$HOME/.nvm"
+                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                        nvm use ${NODE_VERSION}
+                        echo 'Running ESLint...'
+                        npm run build --dry-run || true
+                    '''
+                }
             }
         }
         
         stage('Build') {
             steps {
-                echo 'Building React application...'
-                sh '''
-                    npm run build
-                '''
+                script {
+                    sh '''
+                        export NVM_DIR="$HOME/.nvm"
+                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                        nvm use ${NODE_VERSION}
+                        echo 'Building React application...'
+                        npm run build
+                    '''
+                }
             }
             post {
                 success {
@@ -57,10 +99,13 @@ pipeline {
         
         stage('Test') {
             steps {
-                echo 'Running tests...'
                 script {
                     try {
                         sh '''
+                            export NVM_DIR="$HOME/.nvm"
+                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                            nvm use ${NODE_VERSION}
+                            echo 'Running tests...'
                             CI=true npm test -- --coverage --watchAll=false || true
                         '''
                     } catch (Exception e) {
@@ -87,7 +132,11 @@ pipeline {
             steps {
                 script {
                     def buildSize = sh(
-                        script: 'du -sh build 2>/dev/null | cut -f1 || echo "N/A"',
+                        script: '''
+                            export NVM_DIR="$HOME/.nvm"
+                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                            du -sh build 2>/dev/null | cut -f1 || echo "N/A"
+                        ''',
                         returnStdout: true
                     ).trim()
                     
