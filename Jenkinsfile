@@ -17,29 +17,51 @@ pipeline {
         stage('Setup Node.js') {
             steps {
                 script {
-                    // Install Node.js using nvm
-                    sh '''
-                        # Load nvm if it exists, otherwise install it
-                        if [ -s "$HOME/.nvm/nvm.sh" ]; then
-                            . "$HOME/.nvm/nvm.sh"
-                        else
-                            echo "Installing nvm..."
-                            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-                            export NVM_DIR="$HOME/.nvm"
-                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                        fi
+                    // Setup Node.js on Windows using PowerShell
+                    powershell '''
+                        Write-Host "Checking for Node.js installation..."
                         
-                        # Install and use Node.js
-                        nvm install ${NODE_VERSION} || nvm use ${NODE_VERSION} || true
-                        nvm use ${NODE_VERSION}
-                        
-                        # Verify installation
-                        node --version
-                        npm --version
-                        
-                        # Add nvm to PATH for subsequent stages
-                        echo "export NVM_DIR=\"$HOME/.nvm\"" >> ~/.bashrc
-                        echo "[ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"" >> ~/.bashrc
+                        $nodePath = Get-Command node -ErrorAction SilentlyContinue
+                        if ($nodePath) {
+                            Write-Host "Node.js already installed:"
+                            node --version
+                            npm --version
+                        } else {
+                            Write-Host "Node.js not found. Installing..."
+                            
+                            # Try using Chocolatey if available
+                            $chocoPath = Get-Command choco -ErrorAction SilentlyContinue
+                            if ($chocoPath) {
+                                Write-Host "Installing Node.js using Chocolatey..."
+                                choco install nodejs --version=${env:NODE_VERSION} -y
+                            } else {
+                                # Download and install Node.js directly
+                                Write-Host "Installing Node.js using direct download..."
+                                $installerUrl = "https://nodejs.org/dist/v${env:NODE_VERSION}.${env:NODE_VERSION}.0/node-v${env:NODE_VERSION}.${env:NODE_VERSION}.0-x64.msi"
+                                $installerPath = "$env:TEMP\\nodejs-installer.msi"
+                                
+                                Write-Host "Downloading Node.js from $installerUrl..."
+                                Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+                                
+                                Write-Host "Installing Node.js..."
+                                Start-Process msiexec.exe -Wait -ArgumentList "/i `"$installerPath`" /quiet /norestart"
+                                
+                                # Refresh PATH
+                                $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+                                
+                                # Wait a moment for PATH to refresh
+                                Start-Sleep -Seconds 5
+                            }
+                            
+                            # Refresh PATH in current session
+                            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+                            
+                            # Verify installation
+                            Write-Host "Verifying installation..."
+                            $env:Path += ";C:\\Program Files\\nodejs"
+                            node --version
+                            npm --version
+                        }
                     '''
                 }
             }
@@ -48,12 +70,17 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 script {
-                    sh '''
-                        export NVM_DIR="$HOME/.nvm"
-                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                        nvm use ${NODE_VERSION}
-                        echo 'Installing npm dependencies...'
+                    powershell '''
+                        Write-Host "Installing npm dependencies..."
+                        
+                        # Ensure Node.js is in PATH
+                        $env:Path += ";C:\\Program Files\\nodejs"
+                        
                         npm ci --prefer-offline --no-audit
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "npm ci failed, trying npm install instead..."
+                            npm install --prefer-offline --no-audit
+                        }
                     '''
                 }
             }
@@ -62,12 +89,15 @@ pipeline {
         stage('Lint') {
             steps {
                 script {
-                    sh '''
-                        export NVM_DIR="$HOME/.nvm"
-                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                        nvm use ${NODE_VERSION}
-                        echo 'Running ESLint...'
-                        npm run build --dry-run || true
+                    powershell '''
+                        # Ensure Node.js is in PATH
+                        $env:Path += ";C:\\Program Files\\nodejs"
+                        
+                        Write-Host "Running ESLint..."
+                        npm run build --dry-run
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "Lint check completed with warnings"
+                        }
                     '''
                 }
             }
@@ -76,12 +106,16 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    sh '''
-                        export NVM_DIR="$HOME/.nvm"
-                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                        nvm use ${NODE_VERSION}
-                        echo 'Building React application...'
+                    powershell '''
+                        # Ensure Node.js is in PATH
+                        $env:Path += ";C:\\Program Files\\nodejs"
+                        
+                        Write-Host "Building React application..."
                         npm run build
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "Build failed!"
+                            exit 1
+                        }
                     '''
                 }
             }
@@ -101,12 +135,16 @@ pipeline {
             steps {
                 script {
                     try {
-                        sh '''
-                            export NVM_DIR="$HOME/.nvm"
-                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                            nvm use ${NODE_VERSION}
-                            echo 'Running tests...'
-                            CI=true npm test -- --coverage --watchAll=false || true
+                        powershell '''
+                            # Ensure Node.js is in PATH
+                            $env:Path += ";C:\\Program Files\\nodejs"
+                            
+                            Write-Host "Running tests..."
+                            $env:CI = "true"
+                            npm test -- --coverage --watchAll=false
+                            if ($LASTEXITCODE -ne 0) {
+                                Write-Host "Tests completed with warnings"
+                            }
                         '''
                     } catch (Exception e) {
                         echo "Tests completed with warnings: ${e.message}"
@@ -131,11 +169,25 @@ pipeline {
         stage('Build Summary') {
             steps {
                 script {
-                    def buildSize = sh(
+                    def buildSize = powershell(
                         script: '''
-                            export NVM_DIR="$HOME/.nvm"
-                            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                            du -sh build 2>/dev/null | cut -f1 || echo "N/A"
+                            if (Test-Path "build") {
+                                $size = (Get-ChildItem -Path "build" -Recurse -ErrorAction SilentlyContinue | 
+                                         Measure-Object -Property Length -Sum).Sum
+                                if ($size) {
+                                    $sizeGB = [math]::Round($size / 1GB, 2)
+                                    $sizeMB = [math]::Round($size / 1MB, 2)
+                                    if ($sizeGB -ge 1) {
+                                        "$sizeGB GB"
+                                    } else {
+                                        "$sizeMB MB"
+                                    }
+                                } else {
+                                    "N/A"
+                                }
+                            } else {
+                                "N/A"
+                            }
                         ''',
                         returnStdout: true
                     ).trim()
