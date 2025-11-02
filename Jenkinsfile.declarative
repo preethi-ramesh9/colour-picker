@@ -1,0 +1,70 @@
+// Alternative Declarative Pipeline with more options
+pipeline {
+    agent {
+        docker {
+            image 'node:18-alpine'
+            args '-v /tmp:/tmp'
+        }
+    }
+    
+    environment {
+        CI = 'true'
+        NODE_ENV = 'production'
+    }
+    
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        retry(2)
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Setup Node.js') {
+            steps {
+                sh 'node --version'
+                sh 'npm --version'
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm ci --prefer-offline --no-audit'
+            }
+        }
+        
+        stage('Lint & Build') {
+            parallel {
+                stage('Build') {
+                    steps {
+                        sh 'npm run build'
+                    }
+                }
+            }
+        }
+        
+        stage('Archive') {
+            steps {
+                archiveArtifacts artifacts: 'build/**/*', fingerprint: true
+            }
+        }
+    }
+    
+    post {
+        always {
+            sh 'echo "Build completed with status: ${currentBuild.result}"'
+        }
+        success {
+            echo 'Build successful!'
+        }
+        failure {
+            echo 'Build failed!'
+        }
+    }
+}
